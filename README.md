@@ -147,6 +147,14 @@ Address: 1Love3h1c5qd9ZRoDKkCLSeWfBKR5MTF7t
 Privkey: 5JYtyNYLTRX3dvpN5PCiYF1AKFnETmgBLukCNgfkoBjDHZ2yJp1
 ```
 
+## Method 3: Cross-compile Release Binaries (Zig)
+`build-release.sh` builds `vanitygen++`, `oclvanitygen++` and `keyconv` for Linux (x86_64, arm64), Windows (x86_64) and macOS (x86_64, arm64) on a single x86_64 Linux host. It downloads Zig, OpenSSL, PCRE and the OpenCL headers (checksum-verified) into `.deps/` and needs only `curl`, `perl`, `make` and `python3`:
+```
+$ ./build-release.sh                  # all targets
+$ ./build-release.sh windows-x86_64   # or just some of: linux-x86_64 linux-arm64 windows-x86_64 macos-x86_64 macos-arm64
+```
+Archives are written to `dist/`. OpenSSL and PCRE are linked statically; the Linux binaries need glibc 2.17 or newer, the macOS binaries macOS 11 or newer. `oclvanitygen++` uses the OpenCL driver of the system (`libOpenCL.so.1`, `OpenCL.dll` or `OpenCL.framework`) and must be run from the directory that contains `calc_addrs.cl`. The binaries are not signed: on macOS remove the quarantine flag with `xattr -d com.apple.quarantine vanitygen++ oclvanitygen++ keyconv` after downloading.
+
 # Solving Bitcoin Puzzles
 This tool can be used to solve the [Bitcoin puzzle](https://bitcointalk.org/index.php?topic=1306983.0).
 

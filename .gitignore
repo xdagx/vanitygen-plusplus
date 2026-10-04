@@ -8,3 +8,5 @@ results.txt
 oclvanitygen++
 vanitygen++
 run_tests
+.deps/
+dist/
