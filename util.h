@@ -49,6 +49,8 @@ extern void vg_encode_script_address(const EC_POINT *ppoint,
 				     int addrtype, char *result);
 extern void vg_encode_privkey(const EC_KEY *pkey, int privtype, char *result);
 extern void vg_encode_privkey_compressed(const EC_KEY *pkey, int privtype, char *result);
+extern void vg_encode_privkey_hex(const EC_KEY *pkey, char *result);
+extern int vg_privkey_is_hex(int privtype);
 extern int vg_set_privkey(const BIGNUM *bnpriv, EC_KEY *pkey);
 extern int vg_decode_privkey(const char *b58encoded,
 			     EC_KEY *pkey, int *addrtype);

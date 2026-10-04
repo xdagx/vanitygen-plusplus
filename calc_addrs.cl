@@ -121,6 +121,12 @@
 	__constant bool trx_flag = 0;
 #endif
 
+#ifdef ADDR_TYPE_XDAG
+	__constant bool addr_type_xdag = 1;
+#else
+	__constant bool addr_type_xdag = 0;
+#endif
+
 /*
  * Loop unrolling macros
  *
@@ -1751,18 +1757,20 @@ hash_ec_point_search_prefix(__global uint *found,
 
 
 /*
- * TRX suffix check via Base58Check checksum + modular arithmetic.
+ * TRX/XDAG suffix check via Base58Check checksum + modular arithmetic.
  *
  * hash[5] must be big-endian (already bswap'd).
  * suffix_mask[0..1] holds divisor as two uint32 (high word first).
  * suffix_target[0..1] holds target as two uint32 (high word first).
  *
- * Computes: SHA256(SHA256(0x41 || hash20)) to get 4-byte checksum,
- * then checks (full_25_byte_value mod divisor) == target.
+ * TRX:  checksum = SHA256(SHA256(0x41 || hash20)),
+ *       checks ([0x41 || hash20 || checksum4] mod divisor) == target.
+ * XDAG: no version byte, checksum = SHA256(SHA256(hash20)),
+ *       checks ([hash20 || checksum4] mod divisor) == target.
  */
 int
-trx_check_suffix(uint *hash, __global uint *suffix_mask,
-		 __global uint *suffix_target)
+b58check_suffix(uint *hash, __global uint *suffix_mask,
+		__global uint *suffix_target)
 {
 	uint sha_in[16], sha_out[8];
 
@@ -1773,16 +1781,28 @@ trx_check_suffix(uint *hash, __global uint *suffix_mask,
 	ulong b58target = ((ulong)load_be32(suffix_target[0]) << 32) |
 			  (ulong)load_be32(suffix_target[1]);
 
-	/*
-	 * First SHA256: SHA256(0x41 || hash20)
-	 * Input is 21 bytes. Prepending 0x41 shifts the hash by 1 byte.
-	 */
-	sha_in[0] = (0x41u << 24) | (hash[0] >> 8);
-	sha_in[1] = (hash[0] << 24) | (hash[1] >> 8);
-	sha_in[2] = (hash[1] << 24) | (hash[2] >> 8);
-	sha_in[3] = (hash[2] << 24) | (hash[3] >> 8);
-	sha_in[4] = (hash[3] << 24) | (hash[4] >> 8);
-	sha_in[5] = (hash[4] << 24) | 0x00800000u; /* last byte + 0x80 pad */
+	if (addr_type_xdag) {
+		/* First SHA256: SHA256(hash20), 20 bytes input */
+		sha_in[0] = hash[0];
+		sha_in[1] = hash[1];
+		sha_in[2] = hash[2];
+		sha_in[3] = hash[3];
+		sha_in[4] = hash[4];
+		sha_in[5] = 0x80000000u; /* 0x80 pad */
+		sha_in[15] = 20 * 8; /* 160 bits */
+	} else {
+		/*
+		 * First SHA256: SHA256(0x41 || hash20)
+		 * Input is 21 bytes. Prepending 0x41 shifts the hash by 1 byte.
+		 */
+		sha_in[0] = (0x41u << 24) | (hash[0] >> 8);
+		sha_in[1] = (hash[0] << 24) | (hash[1] >> 8);
+		sha_in[2] = (hash[1] << 24) | (hash[2] >> 8);
+		sha_in[3] = (hash[2] << 24) | (hash[3] >> 8);
+		sha_in[4] = (hash[3] << 24) | (hash[4] >> 8);
+		sha_in[5] = (hash[4] << 24) | 0x00800000u; /* last byte + 0x80 pad */
+		sha_in[15] = 21 * 8; /* 168 bits */
+	}
 	sha_in[6] = 0;
 	sha_in[7] = 0;
 	sha_in[8] = 0;
@@ -1792,7 +1812,6 @@ trx_check_suffix(uint *hash, __global uint *suffix_mask,
 	sha_in[12] = 0;
 	sha_in[13] = 0;
 	sha_in[14] = 0;
-	sha_in[15] = 21 * 8; /* 168 bits */
 
 	sha2_256_init(sha_out);
 	sha2_256_block(sha_out, sha_in);
@@ -1821,14 +1840,16 @@ trx_check_suffix(uint *hash, __global uint *suffix_mask,
 	/* sha_out[0] = first 4 bytes of checksum (big-endian) */
 
 	/*
-	 * Compute N mod divisor, where N = [0x41 || hash20 || checksum4].
+	 * Compute N mod divisor, where N = [0x41 || hash20 || checksum4]
+	 * (XDAG: [hash20 || checksum4]).
 	 * Byte-by-byte reduction: rem = (rem * 256 + byte) % divisor
 	 */
 	ulong rem = 0;
 	uint w;
 
-	/* Byte 0: version 0x41 */
-	rem = 0x41 % divisor;
+	/* Byte 0: version 0x41 (XDAG has no version byte) */
+	if (!addr_type_xdag)
+		rem = 0x41 % divisor;
 
 	/* Bytes 1-20: hash (5 big-endian uint32 = 20 bytes) */
 	w = hash[0];
@@ -1902,9 +1923,9 @@ hash_ec_point_search_prefix_suffix(__global uint *found,
 
 	hash160_unroll(hash_ec_point_search_ps_inner_1);
 
-	if (trx_flag) {
+	if (trx_flag || addr_type_xdag) {
 		/*
-		 * TRX suffix matching: Base58Check requires computing
+		 * TRX/XDAG suffix matching: Base58Check requires computing
 		 * the checksum (double SHA256) which is expensive.
 		 *
 		 * Combined mode: check prefix first (cheap binary search),
@@ -1921,8 +1942,8 @@ hash_ec_point_search_prefix_suffix(__global uint *found,
 				high = (p < 0) ? (i - 1) : high;
 				if (p == 0) {
 					/* Prefix matched — now check suffix */
-					if (trx_check_suffix(hash, suffix_mask,
-							     suffix_target)) {
+					if (b58check_suffix(hash, suffix_mask,
+							    suffix_target)) {
 						found[0] = ((get_global_id(1) *
 							     get_global_size(0)) +
 							    get_global_id(0));
@@ -1937,8 +1958,8 @@ hash_ec_point_search_prefix_suffix(__global uint *found,
 			}
 		} else {
 			/* Suffix-only: check every candidate */
-			if (trx_check_suffix(hash, suffix_mask,
-					     suffix_target)) {
+			if (b58check_suffix(hash, suffix_mask,
+					    suffix_target)) {
 				found[0] = ((get_global_id(1) *
 					     get_global_size(0)) +
 					    get_global_id(0));

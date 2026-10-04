@@ -356,6 +356,11 @@ vg_encode_address(const EC_POINT *ppoint, const EC_GROUP *pgroup,
 		result[42] = '\0';
 		return;
 	}
+	if (addrtype == ADDR_TYPE_XDAG) {
+		// XDAG addresses are always derived from the compressed public key
+		vg_encode_address_compressed(ppoint, pgroup, addrtype, result);
+		return;
+	}
 	unsigned char eckey_buf[128], *pend;
 	unsigned char binres[21] = {0,};
 	unsigned char hash1[32];
@@ -403,6 +408,11 @@ vg_encode_address_compressed(const EC_POINT *ppoint, const EC_GROUP *pgroup,
 	SHA256(eckey_buf, pend - eckey_buf, hash1);
 	RIPEMD160(hash1, sizeof(hash1), &binres[1]);
 
+	if (addrtype == ADDR_TYPE_XDAG) {
+		// XDAG has no version byte: Base58([ripemd160_hash][checksum])
+		vg_b58_encode_check(&binres[1], 20, result);
+		return;
+	}
 	vg_b58_encode_check(binres, sizeof(binres), result);
 }
 
@@ -458,6 +468,10 @@ vg_encode_privkey(const EC_KEY *pkey, int privtype, char *result)
 		result[len+2] = '\0';
 		return;
 	}
+	if (privtype == PRIV_TYPE_XDAG) {
+		vg_encode_privkey_hex(pkey, result);
+		return;
+	}
 	if (strncmp(ticker, "TRX", 3) == 0) {
 		// For tron, private key is just hex string without prefix 0x
 		char *buf = BN_bn2hex(bn); // Must be freed later using OPENSSL_free
@@ -476,6 +490,11 @@ vg_encode_privkey_compressed(const EC_KEY *pkey, int privtype, char *result)
 	const BIGNUM *bn;
 	int nbytes;
 
+	if (privtype == PRIV_TYPE_XDAG) {
+		vg_encode_privkey_hex(pkey, result);
+		return;
+	}
+
 	bn = EC_KEY_get0_private_key(pkey);
 
 	eckey_buf[0] = privtype;
@@ -487,6 +506,39 @@ vg_encode_privkey_compressed(const EC_KEY *pkey, int privtype, char *result)
 	eckey_buf[33] = 1;
 
 	vg_b58_encode_check(eckey_buf, 34, result);
+}
+
+/*
+ * Raw private key as 64 lowercase hex chars (zero-padded, no 0x prefix).
+ * This is the format accepted by "xdagj --importprivatekey".
+ * result must hold at least 65 bytes.
+ */
+void
+vg_encode_privkey_hex(const EC_KEY *pkey, char *result)
+{
+	unsigned char keybuf[32];
+	const BIGNUM *bn;
+	size_t len = 64;
+	int nbytes;
+
+	bn = EC_KEY_get0_private_key(pkey);
+	nbytes = BN_num_bytes(bn);
+	assert(nbytes <= 32);
+	memset(keybuf, 0, sizeof(keybuf));
+	BN_bn2bin(bn, &keybuf[32 - nbytes]);
+
+	hex_enc(result, &len, keybuf, sizeof(keybuf));
+	result[len] = '\0';
+	OPENSSL_cleanse(keybuf, sizeof(keybuf));
+}
+
+/* Is the main private key output of this coin already plain hex? */
+int
+vg_privkey_is_hex(int privtype)
+{
+	return (privtype == PRIV_TYPE_ETH) ||
+	       (privtype == PRIV_TYPE_XDAG) ||
+	       TRXFlag;
 }
 
 int

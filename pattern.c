@@ -517,6 +517,7 @@ vg_output_match_console(vg_context_t *vcp, EC_KEY *pkey, const char *pattern)
 	unsigned char key_buf[512], *pend;
 	char addr_buf[64], addr2_buf[64];
 	char privkey_buf[VG_PROTKEY_MAX_B58];
+	char privkey_hex_buf[65];
 	const char *keytype = "Privkey";
 	int len;
 	int isscript = (vcp->vc_format == VCF_SCRIPT);
@@ -569,6 +570,16 @@ vg_output_match_console(vg_context_t *vcp, EC_KEY *pkey, const char *pattern)
 			vg_encode_privkey_compressed(pkey, vcp->vc_privtype, privkey_buf);
 		else
 			vg_encode_privkey(pkey, vcp->vc_privtype, privkey_buf);
+	}
+
+	/* Also show the raw private key in hex, unless the main output
+	 * is already hex or the key is password-protected */
+	privkey_hex_buf[0] = '\0';
+	if (!vcp->vc_key_protect_pass) {
+		if (vcp->vc_privtype == PRIV_TYPE_XDAG)
+			keytype = vcp->vc_pubkey_base ? "PrivkeyPart (hex)" : "Privkey (hex)";
+		else if (!vg_privkey_is_hex(vcp->vc_privtype))
+			vg_encode_privkey_hex(pkey, privkey_hex_buf);
 	}
 
 	int tickerlength=0;
@@ -626,6 +637,9 @@ vg_output_match_console(vg_context_t *vcp, EC_KEY *pkey, const char *pattern)
 			printf("%sAddress: %s\n"
 			       "%s%s: %s\n",
 			       ticker, addr_buf, ticker, keytype, privkey_buf);
+			if (privkey_hex_buf[0])
+				printf("%s%s (hex): %s\n",
+				       ticker, keytype, privkey_hex_buf);
 		}
 	}
 
@@ -665,6 +679,9 @@ vg_output_match_console(vg_context_t *vcp, EC_KEY *pkey, const char *pattern)
 					"%sAddress: %s\n"
 					"%s%s: %s\n",
 					ticker, addr_buf, ticker, keytype, privkey_buf);
+				if (privkey_hex_buf[0])
+					fprintf(fp, "%s%s (hex): %s\n",
+						ticker, keytype, privkey_hex_buf);
 				fclose(fp);
 			}
 		}
@@ -764,6 +781,9 @@ vg_context_wait_for_completion(vg_context_t *vcp)
  *              \_________________  ___________________/    |
  *                                \/                        |
  *                         [ripemd160_hash]         [checksum (not set)]
+ *
+ * For XDAG there is no version byte, the encoded number is the 24 bytes
+ * [ripemd160_hash][checksum], so the ranges live in [0, 2^192).
  */
 static int
 get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
@@ -774,6 +794,9 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 	int check_upper = 0;
 	int b58pow, b58ceil, b58top = 0;
 	int ret = -1;
+	/* Bit length of the Base58-encoded number:
+	 * [version(1)][hash(20)][checksum(4)] = 200, XDAG [hash(20)][checksum(4)] = 192 */
+	int num_bits = (addrtype == ADDR_TYPE_XDAG) ? 192 : 200;
 
 	BIGNUM *bntarg, *bnceil, *bnfloor;
 	BIGNUM *bnbase;
@@ -878,11 +901,16 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 		}
 	}
 
+	if ((zero_prefix + 1) * 8 > num_bits) {
+		fprintf(stderr, "Prefix '%s' has too many leading '1's\n", pfx);
+		goto not_possible;
+	}
+
 	/* Power-of-two ceiling and floor values based on leading 1s */
 	BN_clear(bntmp);
-	BN_set_bit(bntmp, 200 - (zero_prefix * 8));
+	BN_set_bit(bntmp, num_bits - (zero_prefix * 8));
 	BN_sub(bnceil, bntmp, BN_value_one());
-	BN_set_bit(bnfloor, 192 - (zero_prefix * 8));
+	BN_set_bit(bnfloor, num_bits - 8 - (zero_prefix * 8));
 
 	bnlow = BN_new();
 	bnhigh = BN_new();
@@ -905,6 +933,11 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 			bnbp = bntp;
 		}
 		b58ceil = BN_get_word(bnap);
+
+		if ((p - zero_prefix) > b58pow) {
+			fprintf(stderr, "Prefix '%s' is longer than the address\n", pfx);
+			goto not_possible;
+		}
 
 		if ((b58pow - (p - zero_prefix)) < 6) {
 			/*
@@ -973,6 +1006,10 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 		BN_copy(bnhigh, bnceil);
 		BN_clear(bnlow);
 	}
+
+	/* XDAG has no version byte, bnceil already bounds the range */
+	if (addrtype == ADDR_TYPE_XDAG)
+		goto ranges_done;
 
 	/* Limit the prefix to the address type */
 	BN_clear(bntmp);
@@ -1043,6 +1080,7 @@ get_prefix_ranges(int addrtype, const char *pfx, BIGNUM **result,
 		BN_copy(bnhigh, bntmp2);
 	}
 
+ranges_done:
 	/* Address ranges are complete */
 	assert(check_upper || ((bnlow2 == NULL) && (bnhigh2 == NULL)));
 	result[0] = bnlow;
@@ -1591,7 +1629,8 @@ vg_prefix_context_add_patterns(vg_context_t *vcp,
 				}
 			}
 
-		} else if (TRXFlag && strchr(patterns[i], '*')) {
+		} else if ((TRXFlag || vcp->vc_addrtype == ADDR_TYPE_XDAG) &&
+			   strchr(patterns[i], '*')) {
 			vp = NULL;
 
 			const char *star = strchr(patterns[i], '*');
@@ -1790,9 +1829,9 @@ vg_prefix_context_add_patterns(vg_context_t *vcp,
 	if (npfx && vcpp->vcp_has_suffix &&
 	    !avl_root_empty(&vcpp->vcp_avlroot)) {
 		/* Divide the range by base^suffix_len to account for
-		 * suffix constraint. ETH uses base=16 (hex), TRX uses
-		 * base=58 (Base58). */
-		if (TRXFlag) {
+		 * suffix constraint. ETH uses base=16 (hex), TRX and XDAG
+		 * use base=58 (Base58). */
+		if (TRXFlag || vcp->vc_addrtype == ADDR_TYPE_XDAG) {
 			BN_set_word(bntmp, (BN_ULONG)vcpp->vcp_suffix_divisor);
 		} else {
 			BN_clear(bntmp);
@@ -1905,6 +1944,40 @@ vg_prefix_check_suffix_trx(vg_prefix_context_t *vcpp, unsigned char *binres)
 		       vcpp->vcp_suffix_pattern, slen) == 0);
 }
 
+/*
+ * XDAG suffix verification: the last suffix_len Base58 chars of the
+ * address encode (N mod 58^suffix_len), N = [hash(20)][checksum(4)].
+ * binres is [unused(1)][hash(20)], the checksum is computed here.
+ */
+static int
+vg_prefix_check_suffix_xdag(vg_prefix_context_t *vcpp, unsigned char *binres)
+{
+	unsigned char hash1[32], hash2[32];
+	uint64_t divisor = vcpp->vcp_suffix_divisor;
+	uint64_t rem = 0;
+	int i;
+
+	SHA256(binres + 1, 20, hash1);
+	SHA256(hash1, sizeof(hash1), hash2);
+
+	/* divisor <= 58^9 < 2^53, so rem * 256 + 255 cannot overflow */
+	for (i = 0; i < 20; i++)
+		rem = (rem * 256 + binres[1 + i]) % divisor;
+	for (i = 0; i < 4; i++)
+		rem = (rem * 256 + hash2[i]) % divisor;
+	return (rem == vcpp->vcp_suffix_b58target);
+}
+
+static int
+vg_prefix_check_suffix_any(vg_prefix_context_t *vcpp, unsigned char *binres)
+{
+	if (vcpp->base.vc_addrtype == ADDR_TYPE_XDAG)
+		return vg_prefix_check_suffix_xdag(vcpp, binres);
+	if (TRXFlag)
+		return vg_prefix_check_suffix_trx(vcpp, binres);
+	return vg_prefix_check_suffix(vcpp, binres);
+}
+
 // return 0 (not found), 1 (found), 2 (not continue)
 static int
 vg_prefix_test(vg_exec_context_t *vxcp)
@@ -1918,6 +1991,8 @@ vg_prefix_test(vg_exec_context_t *vxcp)
 	// Convert address from binary format (vxcp->vxc_binres) into BIGNUM (vxcp->vxc_bntarg)
 	if (vxcp->vxc_vc->vc_addrtype == ADDR_TYPE_ETH) {
 		BN_bin2bn(vxcp->vxc_binres, 20, vxcp->vxc_bntarg); // ETH address only take 20 bytes
+	} else if (vxcp->vxc_vc->vc_addrtype == ADDR_TYPE_XDAG) {
+		BN_bin2bn(vxcp->vxc_binres + 1, 24, vxcp->vxc_bntarg); // 24 = [ripemd160_hash(20 bytes)][checksum(4 bytes)], no version byte
 	} else {
 		/*
 		 * We constrain the prefix so that we can check for
@@ -1929,13 +2004,8 @@ vg_prefix_test(vg_exec_context_t *vxcp)
 
 	if (suffix_only) {
 		/* Suffix-only mode: verify suffix match directly */
-		if (TRXFlag) {
-			if (!vg_prefix_check_suffix_trx(vcpp, vxcp->vxc_binres))
-				return 0;
-		} else {
-			if (!vg_prefix_check_suffix(vcpp, vxcp->vxc_binres))
-				return 0;
-		}
+		if (!vg_prefix_check_suffix_any(vcpp, vxcp->vxc_binres))
+			return 0;
 
 		/* EIP-55 case-sensitive check for suffix */
 		if (vxcp->vxc_vc->vc_addrtype == ADDR_TYPE_ETH &&
@@ -1991,13 +2061,8 @@ research:
 
 	/* For combined prefix+suffix: also verify suffix */
 	if (vp && vcpp->vcp_has_suffix) {
-		if (TRXFlag) {
-			if (!vg_prefix_check_suffix_trx(vcpp, vxcp->vxc_binres))
-				vp = NULL;
-		} else {
-			if (!vg_prefix_check_suffix(vcpp, vxcp->vxc_binres))
-				vp = NULL;
-		}
+		if (!vg_prefix_check_suffix_any(vcpp, vxcp->vxc_binres))
+			vp = NULL;
 	}
 
 	if (vp && vxcp->vxc_vc->vc_addrtype == ADDR_TYPE_ETH && (!vcpp->vcp_caseinsensitive)) { // case-sensitive for ETH
@@ -2352,18 +2417,26 @@ vg_regex_test(vg_exec_context_t *vxcp)
 		addr = addr_buf;
 		addr_len = 42;
 	} else {
+		/* Base58Check payload is [version][hash], XDAG has no version byte */
+		unsigned char *payload = vxcp->vxc_binres;
+		int plen = 21;
+		if (vxcp->vxc_vc->vc_addrtype == ADDR_TYPE_XDAG) {
+			payload = vxcp->vxc_binres + 1;
+			plen = 20;
+		}
+
 		/* Hash the hash and write the four byte check code */
-		SHA256(vxcp->vxc_binres, 21, hash1);
+		SHA256(payload, plen, hash1);
 		SHA256(hash1, sizeof(hash1), hash2);
-		memcpy(&vxcp->vxc_binres[21], hash2, 4);
+		memcpy(payload + plen, hash2, 4);
 
 		bn = vxcp->vxc_bntmp;
 		bndiv = vxcp->vxc_bntmp2;
 
-		BN_bin2bn(vxcp->vxc_binres, 25, bn);
+		BN_bin2bn(payload, plen + 4, bn);
 
 		/* Compute the complete encoded address */
-		for (zpfx = 0; zpfx < 25 && vxcp->vxc_binres[zpfx] == 0; zpfx++);
+		for (zpfx = 0; zpfx < plen + 4 && payload[zpfx] == 0; zpfx++);
 		p = sizeof(b58) - 1;
 		b58[p] = '\0';
 		while (!BN_is_zero(bn)) {

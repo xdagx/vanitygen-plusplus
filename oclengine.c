@@ -981,6 +981,9 @@ vg_ocl_init(vg_context_t *vcp, vg_ocl_context_t *vocp, cl_device_id did,
 	if (TRXFlag)
 		end += snprintf(optbuf + end, sizeof(optbuf) - end,
 						"-DTRX_FLAG ");
+	if (vcp->vc_addrtype == ADDR_TYPE_XDAG)
+		end += snprintf(optbuf + end, sizeof(optbuf) - end,
+						"-DADDR_TYPE_XDAG ");
 	if (vocp->voc_quirks & VG_OCL_NV_VERBOSE)
 		end += snprintf(optbuf + end, sizeof(optbuf) - end,
 				"-cl-nv-verbose ");
@@ -1594,8 +1597,8 @@ vg_ocl_prefix_rekey(vg_ocl_context_t *vocp)
 	if (vocp->voc_pattern_rewrite) {
 		/* Upload suffix mask and target if present */
 		if (has_suffix) {
-			if (TRXFlag) {
-				/* TRX: upload divisor and target as uint64
+			if (TRXFlag || vcp->vc_addrtype == ADDR_TYPE_XDAG) {
+				/* TRX/XDAG: upload divisor and target as uint64
 				 * stored in big-endian word order (high, low)
 				 * into the existing 20-byte buffers */
 				unsigned char buf[20];

@@ -26,6 +26,26 @@ START_TEST(test_get_prefix_ranges)
           "41000000000000000000000000000000000000000000000000",
           "41FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
         },
+        /* XDAG has no version byte: 24-byte numbers [hash160][checksum].
+         * "1" means a leading zero byte: [0, 2^184 - 1] */
+        { ADDR_TYPE_XDAG,
+          "1",
+          "0",
+          "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+        },
+        /* "4": the 32-char range lies below 2^184 (it would start with "1"),
+         * only the 33-char range [3*58^32, 4*58^32 - 1] remains */
+        { ADDR_TYPE_XDAG,
+          "4",
+          "20E8609A18D1B8D6E0A2B358950A0367F27DF78300000000",
+          "2BE080CD766CF673D62E44761C0D59DFEDFD4A03FFFFFFFF"
+        },
+        /* "R" only occurs in 32-char addresses: [24*58^31, 25*58^31 - 1] */
+        { ADDR_TYPE_XDAG,
+          "R",
+          "0489FBAB52DF22529A9207150BBAC2AD3BEE107C00000000",
+          "04BA6627CBA86E6B6102C76096E28AC9C917FBD67FFFFFFF"
+        },
     };
 
     size_t n = sizeof(tests) / sizeof(tests[0]);
@@ -279,6 +299,84 @@ START_TEST(test_trx_suffix_cpu_verify)
 
         vg_context_free(vcp);
         TRXFlag = 0;
+    }
+}
+END_TEST
+
+START_TEST(test_xdag)
+{
+    /* Key from the xdagj CLI wallet docs ("--importprivatekey" example),
+     * its hash160 there is f72a663cacd5fc5eed48633d8cb509781ef29e76 */
+    const char *privhex = "8f30bc86f42f55d8d64dd26a5428fc1e65f0616823153c084b43aad76cd97e04";
+    const char *address = "PXthLotQpywwDB9ksCQYCJdwPKxKGxZKX";
+    char buf[128];
+
+    /* Address and private key encoding */
+    {
+        EC_KEY *pkey = EC_KEY_new_by_curve_name(NID_secp256k1);
+        BIGNUM *bn = NULL;
+        BN_hex2bn(&bn, privhex);
+        ck_assert_int_eq(1, vg_set_privkey(bn, pkey));
+
+        vg_encode_address(EC_KEY_get0_public_key(pkey), EC_KEY_get0_group(pkey),
+                          ADDR_TYPE_XDAG, VCF_PUBKEY, buf);
+        ck_assert_str_eq(address, buf);
+        vg_encode_address_compressed(EC_KEY_get0_public_key(pkey), EC_KEY_get0_group(pkey),
+                                     ADDR_TYPE_XDAG, buf);
+        ck_assert_str_eq(address, buf);
+        vg_encode_privkey(pkey, PRIV_TYPE_XDAG, buf);
+        ck_assert_str_eq(privhex, buf);
+        vg_encode_privkey_compressed(pkey, PRIV_TYPE_XDAG, buf);
+        ck_assert_str_eq(privhex, buf);
+
+        /* Leading zero bytes are kept */
+        BN_set_word(bn, 1);
+        vg_set_privkey(bn, pkey);
+        vg_encode_privkey_hex(pkey, buf);
+        ck_assert_str_eq("0000000000000000000000000000000000000000000000000000000000000001", buf);
+
+        BN_free(bn);
+        EC_KEY_free(pkey);
+    }
+
+    /* "Q" also covers the top of the 33-char addresses, clipped at 2^192 - 1 */
+    {
+        BIGNUM *ranges[4];
+        BN_CTX *bnctx = BN_CTX_new();
+        char *got;
+
+        ck_assert_int_eq(0, get_prefix_ranges(ADDR_TYPE_XDAG, "Q", ranges, bnctx));
+        ck_assert_ptr_nonnull(ranges[2]);
+        got = BN_bn2hex(ranges[3]);
+        ck_assert_str_eq("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", got);
+        OPENSSL_free(got);
+        free_ranges(ranges);
+
+        /* Longer than the 33-char address */
+        ck_assert_int_eq(-2, get_prefix_ranges(ADDR_TYPE_XDAG,
+                         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ranges, bnctx));
+        BN_CTX_free(bnctx);
+    }
+
+    /* Base58 suffix: parsing and CPU verification */
+    {
+        vg_context_t *vcp = vg_prefix_context_new(ADDR_TYPE_XDAG, PRIV_TYPE_XDAG, 0);
+        const char *patterns[] = { "PXth*GxZKX" };
+        unsigned char binres[28] = {0}; /* [unused][hash160][checksum] */
+
+        ck_assert_int_eq(1, vg_context_add_patterns(vcp, patterns, 1));
+        vg_prefix_context_t *vcpp = (vg_prefix_context_t *)vcp;
+        ck_assert_int_eq(1, vcpp->vcp_has_suffix);
+        ck_assert(vcpp->vcp_suffix_divisor == 656356768ULL);   /* 58^5 */
+        ck_assert(vcpp->vcp_suffix_b58target == 180587322ULL); /* "GxZKX" */
+        ck_assert(!avl_root_empty(&vcpp->vcp_avlroot));
+
+        memcpy(binres + 1, from_hex("f72a663cacd5fc5eed48633d8cb509781ef29e76"), 20);
+        ck_assert_int_eq(1, vg_prefix_check_suffix_xdag(vcpp, binres));
+        binres[20] ^= 1;
+        ck_assert_int_eq(0, vg_prefix_check_suffix_xdag(vcpp, binres));
+
+        vg_context_free(vcp);
     }
 }
 END_TEST

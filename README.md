@@ -19,7 +19,9 @@ Difficulty: 4476342
 Pattern: 1Love
 Address: 1Love1ZYE2nzXGibw9rtMCPq2tmg2qLtfx
 Privkey: 5KDnavUAswEzQDYY1sAwKPVMUZhZh5hhyS2MnZs8q6SEsQMk2k4
+Privkey (hex): b90e4e5df340c9e3b4d4977e93be98d52a1288a42044af04d4c7ee4258403883
 ```
+For WIF-encoded coins the raw private key is also printed as 64 hex characters (not when the key is encrypted with `-e`/`-E`).
 
 Generate a BTC vanity address (native witness):
 ```
@@ -75,6 +77,25 @@ $ ./oclvanitygen++ -C TON -W v4r2 EQAbc     # TON V4R2, bounceable
 ```
 
 Seeds are generated from `/dev/urandom` (cryptographically secure). The output seed is a standard RFC 8032 Ed25519 seed that can be imported into any compatible wallet.
+
+## XDAG
+`-C XDAG` generates [XDAG](https://github.com/XDagger/xdagj) addresses, in both `vanitygen++` (CPU) and `oclvanitygen++` (GPU). An XDAG address is the Base58 encoding of `RIPEMD160(SHA256(compressed public key))` followed by the first 4 bytes of its double SHA256, with no version byte ([address format](https://github.com/xdagx/xdagj/blob/master/docs/New_Address_Structure.md)). The private key is printed as 64 hex characters, the format expected by `xdag.sh --importprivatekey`.
+```
+$ ./vanitygen++ -C XDAG 4Xd
+Generating XDAG Address
+Difficulty: 78508
+XDAG Pattern: 4Xd
+XDAG Address: 4XdjXsNFJTtHxG2v11GvFWJ9fvE2VmSaL
+XDAG Privkey (hex): 0bc54031ff7965d064b47a2a5c3171b204600632c37208c169029173a7ef5340
+```
+```
+$ ./oclvanitygen++ -C XDAG Xdag            # prefix
+$ ./oclvanitygen++ -C XDAG -i xdag         # case-insensitive prefix
+$ ./oclvanitygen++ -C XDAG '*Xdag'         # suffix (up to 9 chars)
+$ ./oclvanitygen++ -C XDAG 'Xd*ag'         # prefix + suffix
+$ ./vanitygen++ -C XDAG -r 'XDAG'          # regular expression (CPU matching, slow)
+```
+XDAG addresses have no fixed first character. Most are 33 characters long and start with `2`-`9` or `A`-`Q`. A prefix starting with `R`-`z` can only match the rarer 32-character addresses and is about 58 times harder; the printed difficulty already accounts for this. Encryption (`-e`/`-E`) and `-F` formats are not supported for XDAG.
 
 # Build
 ## Method 1: Manual Dependency Installation

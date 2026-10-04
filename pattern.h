@@ -47,6 +47,10 @@
 #define ADDR_TYPE_ATOM -3
 #define PRIV_TYPE_ATOM -3
 
+/* XDAG: Base58(hash160(compressed pubkey) + checksum), no version byte */
+#define ADDR_TYPE_XDAG -4
+#define PRIV_TYPE_XDAG -4
+
 typedef struct _vg_context_s vg_context_t;
 
 struct _vg_exec_context_s;

@@ -66,6 +66,7 @@ Suite* create_sample_suite(void)
 	tcase_add_test(tc, test_eth_suffix_match_verify);
 	tcase_add_test(tc, test_trx_suffix_parsing);
 	tcase_add_test(tc, test_trx_suffix_cpu_verify);
+	tcase_add_test(tc, test_xdag);
 	suite_add_tcase(suite, tc);
 
 	tc = tcase_create("TON address derivation");

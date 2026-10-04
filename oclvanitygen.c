@@ -200,6 +200,7 @@ main(int argc, char **argv)
 					"Argument(UPPERCASE) : Coin : Address Prefix\n"
 					"---------------\n"
 					"ETH : Ethereum : 0x\n"
+					"XDAG : XDAG : Base58, no fixed prefix\n"
 					);
                 vg_print_alicoin_help_msg();
                 fprintf(stderr, "GRS : Groestlcoin : F\n");
@@ -213,6 +214,14 @@ main(int argc, char **argv)
 						"Generating ETH Address\n");
 				addrtype = ADDR_TYPE_ETH;
 				privtype = PRIV_TYPE_ETH;
+				break;
+			}
+			else
+			if (strcmp(optarg, "XDAG")== 0) {
+				fprintf(stderr,
+						"Generating XDAG Address\n");
+				addrtype = ADDR_TYPE_XDAG;
+				privtype = PRIV_TYPE_XDAG;
 				break;
 			}
 			else {
@@ -413,6 +422,20 @@ main(int argc, char **argv)
 			"WARNING: Use OpenSSL 1.0.0d+ for best performance\n");
 	}
 #endif
+
+	if (addrtype == ADDR_TYPE_XDAG) {
+		if (format != VCF_PUBKEY) {
+			fprintf(stderr, "XDAG does not support -F contract\n");
+			return 1;
+		}
+		if (prompt_password || key_password) {
+			fprintf(stderr,
+				"XDAG does not support private key encryption (-e/-E)\n");
+			return 1;
+		}
+		/* XDAG addresses are always derived from the compressed public key */
+		compressed = 1;
+	}
 
 	/* Option -Z can be used with or without option -l
 	   but, option -l must use together with option -Z */
