@@ -24,8 +24,8 @@
 #include <stdint.h>
 
 #ifdef _WIN32
-/* MSVC has SSIZE_T in <BaseTsd.h>; <windows.h> pulls it in too. */
-#include <BaseTsd.h>
+/* MSVC has SSIZE_T in <basetsd.h>; <windows.h> pulls it in too. */
+#include <basetsd.h>
 #if !defined(_SSIZE_T_DEFINED) && !defined(ssize_t)
 typedef SSIZE_T ssize_t;
 #define _SSIZE_T_DEFINED
